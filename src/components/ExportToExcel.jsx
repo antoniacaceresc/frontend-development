@@ -27,9 +27,11 @@ export async function exportToExcel(resultado, activeOpt, cliente) {
       const paquetera = cam.pos_total > 28 ? 'PAQUETERA' : ''
       const tieneChocolate = cam.chocolates === 'SI'
       const skuValioso = cam.skus_valiosos
+      const pdq = cam.pdq
       const esCencosud = cliente === 'Cencosud'
+      const comentarioPDQ = cliente == 'Cencosud' || cliente == 'Walmart'
       const comentarios = [cdName, flujoOc, solicitarBh, paquetera, tieneChocolate ? 'CHOCOLATES' : null,
-        esCencosud && skuValioso ? 'SKU Valioso' : null
+        esCencosud && skuValioso ? 'SKU Valioso' : null, pdq && comentarioPDQ ? 'PDQ' : null
       ].filter(Boolean).join(' - ')
       const regionalCities = ['Chillán', 'Temuco', 'Antofagasta']
       const tipoViaje = regionalCities.some(city => cdName.includes(city)) ? 'Bodega Regional' : 'Bodega Central'

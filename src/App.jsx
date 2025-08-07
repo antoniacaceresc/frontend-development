@@ -4,7 +4,7 @@ import FileUploader from './components/FileUploader'
 import StatsPanel from './components/StatsPanel'
 import TruckGroup from './components/TruckGroup'
 import Header from './components/Header'
-import { optimizeFile } from './api/optimizacion'
+import { optimizeFile, postProcessMove, postProcessAddTruck, postProcessDeleteTruck, postProcessComputeStats } from './api/optimizacion'
 import { exportToExcel } from './components/ExportToExcel'
 
 const CLIENTES = ['Walmart', 'Cencosud', 'Disvet']
@@ -38,8 +38,8 @@ export default function App() {
       binData.camiones = binData.camiones.map((cam, i) => ({ ...cam, numero: i + 1 }))
 
       // Calcular estadísticas iniciales
-      vcuData.estadisticas = computeStats(vcuData.camiones, vcuData.pedidos_no_incluidos)
-      binData.estadisticas = computeStats(binData.camiones, binData.pedidos_no_incluidos)
+      vcuData.estadisticas = await postProcessComputeStats(vcuData)
+      binData.estadisticas = await postProcessComputeStats(binData)
 
       // Reasignar objetos modificados
       data.vcu = vcuData
@@ -67,45 +67,62 @@ export default function App() {
     }
   }
 
-  const computeStats = (camiones, pedidosNoIncluidos) => {
-    const cantidad_camiones = camiones.length
-    const cantidad_normal = camiones.filter(c => c.tipo_camion !== 'bh').length
-    const cantidad_bh = camiones.filter(c => c.tipo_camion === 'bh').length
-    const cantidad_pedidos_asignados = camiones.reduce((sum, c) => sum + (c.pedidos?.length || 0), 0)
-    const total_pedidos = cantidad_pedidos_asignados + pedidosNoIncluidos.length
-
-    const promedio_vcu_normal = cantidad_normal
-      ? camiones
-        .filter(c => c.tipo_camion !== 'bh')
-        .reduce((sum, c) => sum + (c.vcu_max || 0), 0) / cantidad_normal
-      : 0
-
-    const promedio_vcu_bh = cantidad_bh
-      ? camiones
-        .filter(c => c.tipo_camion === 'bh')
-        .reduce((sum, c) => sum + (c.vcu_max || 0), 0) / cantidad_bh
-      : 0
-
-    const promedio_vcu = cantidad_camiones
-      ? camiones
-        .reduce((sum, c) => sum + (c.vcu_max || 0), 0) / cantidad_camiones
-      : 0
-
-    const valorizado = camiones.reduce((sum, c) => sum + (c.valor_total || 0), 0)
-
-    return {
-      cantidad_camiones,
-      cantidad_camiones_normal: cantidad_normal,
-      cantidad_camiones_bh: cantidad_bh,
-      cantidad_pedidos_asignados,
-      total_pedidos,
-      promedio_vcu,
-      promedio_vcu_normal,
-      promedio_vcu_bh,
-      valorizado,
+  const computeStats = async () => {
+    try {
+      const dataOpt = resultado[activeOpt];
+      const stats = await postProcessComputeStats(dataOpt);
+      setResultado(prev => ({
+        ...prev,
+        [activeOpt]: {
+          ...prev[activeOpt],
+          estadisticas: stats
+        }
+      }));
+    } catch (err) {
+      alert(`Error recalculando estadísticas:\n${err.message}`);
     }
-  }
+  };
 
+  /*
+    const computeStats = (camiones, pedidosNoIncluidos) => {
+      const cantidad_camiones = camiones.length
+      const cantidad_normal = camiones.filter(c => c.tipo_camion !== 'bh').length
+      const cantidad_bh = camiones.filter(c => c.tipo_camion === 'bh').length
+      const cantidad_pedidos_asignados = camiones.reduce((sum, c) => sum + (c.pedidos?.length || 0), 0)
+      const total_pedidos = cantidad_pedidos_asignados + pedidosNoIncluidos.length
+  
+      const promedio_vcu_normal = cantidad_normal
+        ? camiones
+          .filter(c => c.tipo_camion !== 'bh')
+          .reduce((sum, c) => sum + (c.vcu_max || 0), 0) / cantidad_normal
+        : 0
+  
+      const promedio_vcu_bh = cantidad_bh
+        ? camiones
+          .filter(c => c.tipo_camion === 'bh')
+          .reduce((sum, c) => sum + (c.vcu_max || 0), 0) / cantidad_bh
+        : 0
+  
+      const promedio_vcu = cantidad_camiones
+        ? camiones
+          .reduce((sum, c) => sum + (c.vcu_max || 0), 0) / cantidad_camiones
+        : 0
+  
+      const valorizado = camiones.reduce((sum, c) => sum + (c.valor_total || 0), 0)
+  
+      return {
+        cantidad_camiones,
+        cantidad_camiones_normal: cantidad_normal,
+        cantidad_camiones_bh: cantidad_bh,
+        cantidad_pedidos_asignados,
+        total_pedidos,
+        promedio_vcu,
+        promedio_vcu_normal,
+        promedio_vcu_bh,
+        valorizado,
+      }
+    }
+  */
   const vcuOpt = resultado?.vcu || { camiones: [], estadisticas: {}, pedidos_no_incluidos: [] }
   const binOpt = resultado?.binpacking || { camiones: [], estadisticas: {}, pedidos_no_incluidos: [] }
 
@@ -156,63 +173,20 @@ export default function App() {
     return Number(a.ces[0]) - Number(b.ces[0])
   })
 
+  const moveOrders = async (pedidos, { targetTruckId }) => {
+    try {
+      const dataOpt = resultado[activeOpt];
+      const updated = await postProcessMove(pedidos, targetTruckId, dataOpt);
+      setResultado(prev => ({
+        ...prev,
+        [activeOpt]: updated
+      }));
+      setSelectedPedidos([]); // limpia selección
+    } catch (err) {
+      alert(`Error moviendo pedidos:\n${err.message}`);
+    }
+  };
 
-  const moveOrders = (pedidos, { targetTruckId }) => {
-    setResultado(prev => {
-      const copy = { ...prev }
-      const data = copy[activeOpt]
-
-      // 1) Eliminar los pedidos de todos los camiones:
-      data.camiones = data.camiones.map(cam => ({
-        ...cam,
-        pedidos: cam.pedidos.filter(p => !pedidos.some(x => x.PEDIDO === p.PEDIDO))
-      }))
-
-      // 2) Quitar esos pedidos de la lista de no asignados
-      data.pedidos_no_incluidos = data.pedidos_no_incluidos.filter(
-        p => !pedidos.some(x => x.PEDIDO === p.PEDIDO)
-      )
-
-      if (targetTruckId) {
-        // 3a) Si hay targetTruckId, agregarlos a ese camión
-        data.camiones = data.camiones.map(cam => {
-          if (cam.id === targetTruckId) {
-            return { ...cam, pedidos: [...cam.pedidos, ...pedidos] }
-          }
-          return cam
-        })
-      } else {
-        // 3b) Si no hay target, vuelven a “no asignados”
-        data.pedidos_no_incluidos = [...data.pedidos_no_incluidos, ...pedidos]
-      }
-
-      // 4) Recalcular métricas en cada camión
-      data.camiones = data.camiones.map(cam => {
-        const vvol = cam.pedidos.reduce((sum, x) => sum + (x.VCU_VOL || 0), 0)
-        const vpeso = cam.pedidos.reduce((sum, x) => sum + (x.VCU_PESO || 0), 0)
-        const pos = cam.pedidos.reduce((sum, x) => sum + (x.POSICION || 0), 0)
-        const ocs = [...new Set(cam.pedidos.map(p => p.OC).filter(Boolean))]
-        const flujo = ocs.length === 1 ? ocs[0] : ''
-        const pallets = cam.pedidos.reduce((sum, x) => sum + (x.PALLETS || 0), 0)
-        const valor = cam.pedidos.reduce((sum, x) => sum + (x.VALOR || 0), 0)
-        const tieneChocolates = cam.pedidos.some(p => p.CHOCOLATES === 'SI')
-        const vcu_max = Math.max(vvol, vpeso)
-        return {
-          ...cam, vcu_vol: vvol, vcu_peso: vpeso, vcu_max, pos_total: pos, flujo_oc: flujo,
-          chocolates: tieneChocolates ? 'SI' : 'NO', pallets_conf: pallets, valor_total: valor
-        }
-      })
-
-      // 5) Reasignar número secuencial a cada camión
-      data.camiones = data.camiones.map((cam, i) => ({ ...cam, numero: i + 1 }))
-
-      // 6) Recalcular estadísticas globales
-      data.estadisticas = computeStats(data.camiones, data.pedidos_no_incluidos)
-
-      return { ...prev, [activeOpt]: data }
-    })
-    setSelectedPedidos([])
-  }
 
   const onSelectPedido = pedido => {
     setSelectedPedidos(sel => {
@@ -221,59 +195,26 @@ export default function App() {
     })
   }
 
-  const addTruck = (cd, ce, ruta) => {
-    setResultado(prev => {
-      const copy = { ...prev }
-      const data = copy[activeOpt]
+  const addTruck = async (cd, ce, ruta) => {
+    try {
+      const dataOpt = resultado[activeOpt];
+      const updated = await postProcessAddTruck(cd, ce, ruta, dataOpt);
+      setResultado(prev => ({ ...prev, [activeOpt]: updated }));
+    } catch (err) {
+      alert(`Error agregando camión:\n${err.message}`);
+    }
+  };
 
-      // cd y ce ya vienen como arrays en este flujo
-      const cdsArr = Array.isArray(cd) ? cd : [cd]
-      const ceArrs = Array.isArray(ce) ? ce : [ce]
 
-      const newTruck = {
-        id: crypto.randomUUID(),
-        numero: data.camiones.length + 1,
-        grupo: `${cdsArr.join(',')}__${ceArrs.join(',')}`,
-        tipo_ruta: ruta,
-        cd: cdsArr,
-        ce: ceArrs,
-        pedidos: [],
-        vcu_vol: 0,
-        vcu_peso: 0,
-        vcu_max: 0,
-        pos_total: 0,
-        flujo_oc: '',
-        tipo_camion: 'normal',
-        chocolates: 'NO',
-        pallets_conf: 0,
-        valor_total: 0
-      }
-
-      data.camiones.push(newTruck)
-
-      // Reasignar número secuencial
-      data.camiones = data.camiones.map((cam, i) => ({ ...cam, numero: i + 1 }))
-
-      data.estadisticas = computeStats(data.camiones, data.pedidos_no_incluidos)
-      return { ...prev, [activeOpt]: data }
-    })
-  }
-
-  const deleteTruck = truckId => {
-    setResultado(prev => {
-      const copy = { ...prev }
-      const data = copy[activeOpt]
-      const toDelete = data.camiones.find(cam => cam.id === truckId)
-      if (toDelete) {
-        data.camiones = data.camiones.filter(cam => cam.id !== truckId)
-        data.pedidos_no_incluidos = [...data.pedidos_no_incluidos, ...toDelete.pedidos]
-        data.camiones = data.camiones.map((cam, i) => ({ ...cam, numero: i + 1 }))
-      }
-      data.estadisticas = computeStats(data.camiones, data.pedidos_no_incluidos)
-      return { ...prev, [activeOpt]: data }
-    })
-  }
-
+  const deleteTruck = async (truckId) => {
+    try {
+      const dataOpt = resultado[activeOpt];
+      const updated = await postProcessDeleteTruck(truckId, dataOpt);
+      setResultado(prev => ({ ...prev, [activeOpt]: updated }));
+    } catch (err) {
+      alert(`Error eliminando camión:\n${err.message}`);
+    }
+  };
 
   return (
     <div className="app">
